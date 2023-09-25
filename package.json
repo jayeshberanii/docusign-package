@@ -9,8 +9,8 @@
   "license": "ISC",
   "dependencies": {
     "docusign-esign": "^6.4.0",
-    "moment": "^2.29.4"
+    "moment": "^2.29.4",
+    "validator": "^13.11.0"
   },
-  "devDependencies": {},
   "description": ""
 }

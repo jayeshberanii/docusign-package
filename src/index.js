@@ -1,8 +1,14 @@
 const docusign = require("docusign-esign");
+const path = require('path');
+const validator = require('validator');
 const moment = require("moment");
 const fs = require("fs");
+const demoDocsPath = path.join(process.cwd(), '/public/documents');
 
 let DsJwtAuth = function _DsJwtAuth(req) {
+
+  this.iKey = req.iKey
+  this.userGuide = req.userGuide
   this.accessToken = null
   this._tokenExpiration = ''
   this.scopes =
@@ -21,17 +27,15 @@ module.exports = DsJwtAuth;
 
 // Get Access Token
 DsJwtAuth.prototype.getToken = async function _getToken() {
-  let dsClientId = "936dc8a9-90cf-45b6-853e-c29f89ad5808";
-  let impersonatedUserGuid = "00d3b054-00eb-4e93-84ae-49ed6e0a4373";
-  let rsaKey = fs.readFileSync("config/private.key");
+  let rsaKey = fs.readFileSync("../config/private.key");
 
   const jwtLifeSec = 10 * 60,
     dsApi = new docusign.ApiClient();
   dsApi.setOAuthBasePath(this.dsOauthServer.replace("https://", ""));
 
   const results = await dsApi.requestJWTUserToken(
-    dsClientId,
-    impersonatedUserGuid,
+    this.iKey,
+    this.userGuide,
     this.scopes,
     rsaKey,
     jwtLifeSec
@@ -48,7 +52,6 @@ DsJwtAuth.prototype.getToken = async function _getToken() {
     tokenExpirationTimestamp: expiresAt,
   };
 };
-
 
 // Get User Info
 DsJwtAuth.prototype.getUserInfo = async function _getUserInfo() {
@@ -79,13 +82,8 @@ DsJwtAuth.prototype.getUserInfo = async function _getUserInfo() {
   this.accountId = accountInfo.accountId;
   this.accountName = accountInfo.accountName;
   this.basePath = accountInfo.baseUri + baseUriSuffix;
-  let obj={
-    accountId: this.accountId,
-    basePath: this.basePath,
-    accountName: this.accountName,
-    accessToken: accessToken
-  }
-  console.log("Account Info get Success***",obj);
+
+  console.log("Account Info get Success");
   return {
     accountId: this.accountId,
     basePath: this.basePath,
@@ -94,21 +92,127 @@ DsJwtAuth.prototype.getUserInfo = async function _getUserInfo() {
   };
 };
 
-DsJwtAuth.prototype.makeTemplate = async function _makeTemplate() {
+function makeEnvelope(args, tabValues) {
+
+  let commonFormObject = {
+    font: 'TimesNewRoman',
+    fontSize: 'size11',
+    bold: "true",
+    locked: "true",
+    anchorUnits: "pixels",
+    anchorYOffset: "-5",
+    anchorXOffset: "0"
+  };
+
+  let docBytes = fs.readFileSync(args.docFile);
+  let doc1b64 = Buffer.from(docBytes).toString("base64");
+
+  let document = docusign.Document.constructFromObject({
+    documentBase64: doc1b64,
+    name: args.outputFileName,
+    fileExtension: "docx",
+    documentId: "1",
+  });
+
+  let signer = docusign.Signer.constructFromObject({
+    email: args.signerEmail,
+    name: args.signerName,
+    clientUserId: args.signerClientId,
+    recipientId: 1,
+  });
+
+  let signHere = docusign.SignHere.constructFromObject({
+    anchorString: "/eSignHere/"
+  });
+
+  let textTabs = [];
+  for (let key in tabValues) {
+    textTabs.push(docusign.Text.constructFromObject({ ...commonFormObject, ...tabValues[key] }));
+  }
+  signer.tabs = docusign.Tabs.constructFromObject({
+    signHereTabs: [signHere],
+    textTabs: textTabs,
+  });
+
+  envelopeDefinition = docusign.EnvelopeDefinition.constructFromObject({
+    emailSubject: args.emailSubject,
+    documents: [document],
+    recipients: docusign.Recipients.constructFromObject({ signers: [signer] }),
+    status: args.status
+  });
+
+  return envelopeDefinition;
+}
+
+
+DsJwtAuth.prototype.createEnvelope = async function _createEnvelop(body) {
+  const response = await this.getUserInfo()
+  let dsApiClient = new docusign.ApiClient();
+  dsApiClient.setBasePath(response.basePath);
+  dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
+  let envelopesApi = new docusign.EnvelopesApi(dsApiClient),
+  results = null
+  const envelopeArgs = {
+    dsReturnUrl: body.dsReturnUrl,
+    signerEmail: validator.escape(body.signerEmail),
+    signerName: validator.escape(body.signerName),
+    emailSubject: body.emailSubject,
+    signerClientId: body.signerClientId,
+    status: body.status,
+    outputFileName: body.outputFileName,
+    docFile: path.resolve(demoDocsPath, body.docName)
+  };
+  const args = {
+    accessToken: response.accessToken,
+    basePath: response.basePath,
+    accountId: response.accountId,
+    envelopeArgs: envelopeArgs,
+    tabValues: body.tabValues
+  };
+
+  // Step 1. Make the envelope request body
+  let envelope = makeEnvelope(envelopeArgs, body.tabValues);
+
+  results = await envelopesApi.createEnvelope(response.accountId, {
+    envelopeDefinition: envelope,
+  });
+  let envelopeId = results.envelopeId;
+  console.log(`Envelope was created. EnvelopeId ${envelopeId}`);
+
+  // Step 3. create the recipient view, the embedded signing
+  let viewRequest = docusign.RecipientViewRequest.constructFromObject({
+    returnUrl: envelopeArgs.dsReturnUrl,
+    authenticationMethod: "none",
+    email: envelopeArgs.signerEmail,
+    userName: envelopeArgs.signerName,
+    clientUserId: envelopeArgs.signerClientId,
+  });
+
+  // Step 4. Call the CreateRecipientView API
+  results = await envelopesApi.createRecipientView(response.accountId, envelopeId, {
+    recipientViewRequest: viewRequest,
+  });
+
+  return { envelopeId: envelopeId, redirectUrl: results.url };
+};
+
+//////////////////////////////////***************/////////////////////////////////
+
+DsJwtAuth.prototype.makeTemplate = async function _makeTemplate(filePath, name, type, docId, signerRole, recipientId, routingOrder) {
   let docPdfBytes;
-  docPdfBytes = fs.readFileSync('config/World_Wide_Corp_lorem.pdf');
+  docPdfBytes = fs.readFileSync(filePath);
   // add the documents
   let doc = new docusign.Document()
   let docB64 = Buffer.from(docPdfBytes).toString("base64");
   doc.documentBase64 = docB64;
-  doc.name = "Lorem Ipsum";
-  doc.fileExtension = "pdf";
-  doc.documentId = "1";
+  doc.name = name || "NewDocument";
+  doc.fileExtension = type;
+  doc.documentId = docId || "1";
 
   let signer1 = docusign.Signer.constructFromObject({
-    roleName: "signer",
-    recipientId: "1",
-    routingOrder: "1",
+    roleName: signerRole || "signer",
+    recipientId: recipientId || "1",
+    routingOrder: routingOrder || "1",
   });
 
   let cc1 = new docusign.CarbonCopy();
@@ -296,7 +400,7 @@ DsJwtAuth.prototype.createTemplate = async function _createTemplate() {
   if (results.resultSetSize > 0) {
     templateId = results.envelopeTemplates[0].templateId;
     const formData = await envelopesApi.getFormData("d5699753-f73f-4701-9905-53e644161ee9", "6a0c77f7-f642-4d74-b1f6-1b104eb6fd3b");
-    console.log(formData,"::::: Form Data ::::::");
+    console.log(formData, "::::: Form Data ::::::");
     resultsTemplateName = results.envelopeTemplates[0].name;
     createdNewTemplate = false;
   } else {
@@ -317,22 +421,24 @@ DsJwtAuth.prototype.createTemplate = async function _createTemplate() {
     // templateId = results.envelopeTemplates[0].templateId;
     // resultsTemplateName = results.envelopeTemplates[0].name;
   }
-  let obj={
+  let obj = {
     templateId: templateId,
     templateName: resultsTemplateName,
   }
-  console.log("Get template success***",obj);
+  console.log("Get template success***", obj);
   return {
     templateId: templateId,
     templateName: resultsTemplateName,
     createdNewTemplate: createdNewTemplate,
   };
 }
+
 function makeSenderViewRequest(args) {
   let viewRequest = new docusign.ReturnUrlRequest();
   viewRequest.returnUrl = "http://localhost:3000/";
   return viewRequest;
 }
+
 function makeRecipientViewRequest(args) {
 
   let viewRequest = new docusign.RecipientViewRequest();
@@ -348,15 +454,15 @@ function makeRecipientViewRequest(args) {
   return viewRequest;
 }
 
-DsJwtAuth.prototype.sendEnvelopeUsingEmbeddedSending = async function _sendEnvelopeUsingEmbeddedSending(){
+DsJwtAuth.prototype.sendEnvelopeUsingEmbeddedSending = async function _sendEnvelopeUsingEmbeddedSending() {
   const response = await this.getUserInfo()
-  const templateResponse=await this.createTemplate()
+  const templateResponse = await this.createTemplate()
   let dsApiClient = new docusign.ApiClient();
   dsApiClient.setBasePath(response.basePath);
   dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
   let envelopesApi = new docusign.EnvelopesApi(dsApiClient);
 
-  let viewRequest=makeSenderViewRequest()
+  let viewRequest = makeSenderViewRequest()
 
   results = await envelopesApi.createSenderView(response.accountId, templateResponse.templateId, {
     returnUrlRequest: viewRequest,
@@ -368,15 +474,15 @@ DsJwtAuth.prototype.sendEnvelopeUsingEmbeddedSending = async function _sendEnvel
   return { envelopeId: templateResponse.templateId, redirectUrl: url };
 }
 
-DsJwtAuth.prototype.sendEnvelopeForEmbeddedSigning = async function _sendEnvelopeForEmbeddedSigning(){
+DsJwtAuth.prototype.sendEnvelopeForEmbeddedSigning = async function _sendEnvelopeForEmbeddedSigning() {
   const response = await this.getUserInfo()
-  const templateResponse=await this.createTemplate()
+  const templateResponse = await this.createTemplate()
   let dsApiClient = new docusign.ApiClient();
   dsApiClient.setBasePath(response.basePath);
   dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
   let envelopesApi = new docusign.EnvelopesApi(dsApiClient);
 
-  let viewRequest=makeRecipientViewRequest()
+  let viewRequest = makeRecipientViewRequest()
 
   let results = await envelopesApi.createRecipientView(response.accountId, templateResponse.templateId, {
     recipientViewRequest: viewRequest,
@@ -386,7 +492,4 @@ DsJwtAuth.prototype.sendEnvelopeForEmbeddedSigning = async function _sendEnvelop
   return { envelopeId: templateResponse.templateId, redirectUrl: results.url };
 
 }
-
-const a = new DsJwtAuth()
-a.createTemplate()
 
