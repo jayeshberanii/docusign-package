@@ -151,7 +151,7 @@ DsJwtAuth.prototype.createEnvelope = async function _createEnvelop(body) {
   dsApiClient.setBasePath(response.basePath);
   dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
   let envelopesApi = new docusign.EnvelopesApi(dsApiClient),
-  results = null
+    results = null
   const envelopeArgs = {
     dsReturnUrl: body.dsReturnUrl,
     signerEmail: validator.escape(body.signerEmail),
@@ -178,14 +178,17 @@ DsJwtAuth.prototype.createEnvelope = async function _createEnvelop(body) {
   });
   let envelopeId = results.envelopeId;
   console.log(`Envelope was created. EnvelopeId ${envelopeId}`);
+  envelopesApi.getEnvelope(response.accountId, envelopeId, null, (error, envelope, response) => {
+    if (error) {
+      console.error('Error retrieving envelope:', error);
+    } else {
+      console.log('Envelope Data:', envelope);
+    }
+  });
 
   // Step 3. create the recipient view, the embedded signing
   let viewRequest = docusign.RecipientViewRequest.constructFromObject({
     returnUrl: envelopeArgs.dsReturnUrl,
-    authenticationMethod: "none",
-    email: envelopeArgs.signerEmail,
-    userName: envelopeArgs.signerName,
-    clientUserId: envelopeArgs.signerClientId,
   });
 
   // Step 4. Call the CreateRecipientView API
@@ -380,7 +383,6 @@ DsJwtAuth.prototype.makeTemplate = async function _makeTemplate(filePath, name, 
 
 DsJwtAuth.prototype.createTemplate = async function _createTemplate() {
   const response = await this.getUserInfo()
-  // console.log(response);
   let dsApiClient = new docusign.ApiClient();
   dsApiClient.setBasePath(response.basePath);
   dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
@@ -395,12 +397,9 @@ DsJwtAuth.prototype.createTemplate = async function _createTemplate() {
   results = await templatesApi.listTemplates(response.accountId, {
     searchText: templateName,
   });
-  // console.log(results.envelopeTemplates[0].owner);
 
   if (results.resultSetSize > 0) {
     templateId = results.envelopeTemplates[0].templateId;
-    const formData = await envelopesApi.getFormData("d5699753-f73f-4701-9905-53e644161ee9", "6a0c77f7-f642-4d74-b1f6-1b104eb6fd3b");
-    console.log(formData, "::::: Form Data ::::::");
     resultsTemplateName = results.envelopeTemplates[0].name;
     createdNewTemplate = false;
   } else {
@@ -493,3 +492,88 @@ DsJwtAuth.prototype.sendEnvelopeForEmbeddedSigning = async function _sendEnvelop
 
 }
 
+DsJwtAuth.prototype.createTemplateWithEnvelope = async function _createTemplateWithEnvelope() {
+
+  //get user info
+  const response = await this.getUserInfo()
+
+  let dsApiClient = new docusign.ApiClient();
+  dsApiClient.setBasePath(response.basePath);
+  dsApiClient.addDefaultHeader("Authorization", "Bearer " + response.accessToken);
+  let envelopesApi = new docusign.EnvelopesApi(dsApiClient);
+  let templatesApi = new docusign.TemplatesApi(dsApiClient);
+  let templateName = "my-template",
+    templateId = null,
+    resultsTemplateName = null,
+    createdNewTemplate = null;
+
+  let results = await templatesApi.listTemplates(response.accountId, {
+    searchText: templateName,
+  });
+
+  if (results.resultSetSize > 0) {
+    templateId = results.envelopeTemplates[0].templateId;
+    resultsTemplateName = results.envelopeTemplates[0].name;
+    createdNewTemplate = false;
+  } else {
+    throw new Error('template not found in your account')
+  }
+  console.log("TemplateId :: ", templateId);
+  const envDef = new docusign.EnvelopeDefinition();
+  envDef.templateId = templateId;
+  envDef.status = 'sent';
+
+  const templateRoles = [
+    {
+      roleName: 'Signer 1',           // Role name as defined in the template
+      name: 'Jayesh jayesh',       // Recipient's name
+      email: 'jayesh.jayesh@gmail.com', // Recipient's email
+      roleName: 'Signer 1',
+      authenticationMethod: 'None',
+      tabs: {
+        textTabs: [
+          {
+            tabLabel: 'T01',
+            value: 'jayesh berani',
+          },
+          {
+            tabLabel: 'T02',
+            value: 'jayes.aspire@gmail.com',
+          },
+        ],
+      },
+    },
+    // Add more recipients and roles as needed
+  ];
+  envDef.templateRoles = templateRoles;
+  let res = await envelopesApi.createEnvelope(response.accountId, {
+    envelopeDefinition: envDef
+  })
+  let envelopeId = res.envelopeId
+  console.log('Envelope sent: ', res.envelopeId);
+
+  // envelopesApi.getEnvelope(response.accountId, envelopeId, null, (error, envelope, response) => {
+  //   if (error) {
+  //     console.error('Error retrieving envelope:', error);
+  //   } else {
+  //     console.log('Envelope Data:', envelope);
+  //   }
+  // });
+
+  // Step 3. create the recipient view, the embedded signing
+  let viewRequest = docusign.RecipientViewRequest.constructFromObject({
+    userName:"Jayesh jayesh",
+    email:'jayesh.jayesh@gmail.com',
+    roleName: 'Signer 1',
+    authenticationMethod: 'None',
+    returnUrl: 'http://localhost:3000/ds/callback',
+    recipientId:1
+  });
+
+  // Step 4. Call the CreateRecipientView API
+  results = await envelopesApi.createRecipientView(response.accountId, envelopeId, {
+    recipientViewRequest: viewRequest,
+  });
+  console.log("Url :: ",results.url);
+  return { envelopeId: envelopeId, redirectUrl: results.url };
+}

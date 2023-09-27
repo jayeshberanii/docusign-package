@@ -23,17 +23,18 @@ let tabValues={
 }
 export default async function handler(req, res) {
   const a = await new DsJwtAuth({iKey:iKey,userGuide:userGuide})
-  const b =await a.createEnvelope({
-    dsReturnUrl:"http://localhost:3000/callback",
-    signerEmail:"jberani1432@gmail.com",
-    signerName:"jayesh jayesh",
-    emailSubject:"no subject",
-    signerClientId:1000,
-    status:'sent',
-    outputFileName:"lorem ipsum", 
-    docName:'Resume.docx',
-    tabValues:tabValues
-  })
+  // const b =await a.createEnvelope({
+  //   dsReturnUrl:"http://localhost:3000/callback",
+  //   signerEmail:"jberani1432@gmail.com",
+  //   signerName:"jayesh jayesh",
+  //   emailSubject:"no subject",
+  //   signerClientId:1000,
+  //   status:'sent',
+  //   outputFileName:"lorem ipsum", 
+  //   docName:'Resume.docx',
+  //   tabValues:tabValues
+  // })
+  const b=await a.createTemplateWithEnvelope()
   console.log(b,":::::::::::::::::::::");
   res.status(200).json(b)
 }
