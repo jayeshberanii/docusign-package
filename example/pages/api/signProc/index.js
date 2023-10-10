@@ -21,6 +21,7 @@ let tabValues={
     "value": "My Project"
 },
 }
+
 export default async function handler(req, res) {
   const a = await new DsJwtAuth({iKey:iKey,userGuide:userGuide})
   // const b =await a.createEnvelope({
@@ -34,7 +35,30 @@ export default async function handler(req, res) {
   //   docName:'Resume.docx',
   //   tabValues:tabValues
   // })
-  const b=await a.createTemplateWithEnvelope()
+  const templateName='my-template'
+  const templateRoles = [
+    {
+      roleName: 'Signer 1',           // Role name as defined in the template
+      name: 'Jayesh jayesh',       // Recipient's name
+      email: 'jayesh.jayesh@gmail.com', // Recipient's email
+      authenticationMethod: 'None',
+      returnUrl:'http://localhost:3000/ds/callback',
+      tabs: {
+        textTabs: [
+          {
+            tabLabel: 'T01',
+            value: 'jayesh berani',
+          },
+          {
+            tabLabel: 'T02',
+            value: 'jayes.aspire@gmail.com',
+          },
+        ],
+      },
+    },
+    // Add more recipients and roles as needed
+  ];
+  const b=await a.createEnvelopWithTemplate(templateName,templateRoles)
   console.log(b,":::::::::::::::::::::");
   res.status(200).json(b)
 }
